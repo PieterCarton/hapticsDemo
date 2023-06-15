@@ -45,6 +45,7 @@
 #include "chai3d.h"
 //------------------------------------------------------------------------------
 #include <GLFW/glfw3.h>
+#include <string>
 //------------------------------------------------------------------------------
 using namespace chai3d;
 using namespace std;
@@ -69,6 +70,14 @@ bool fullscreen = false;
 // mirrored display
 bool mirroredDisplay = false;
 
+int detail = 0;
+int max_detail = 7;
+
+int mesh_index = 0;
+int max_mesh_index = 3;
+
+const string meshes[] = {"hourglass", "sphere", "torus", "bullet"};
+const double offset[] = {-0.25, 0, 0, -0.5};
 
 //------------------------------------------------------------------------------
 // DECLARED VARIABLES
@@ -105,6 +114,7 @@ cFontPtr font;
 
 // a label to display the rate [Hz] at which the simulation is running
 cLabel* labelRates;
+cLabel* labelInstructions;
 
 // a flag that indicates if the haptic simulation is currently running
 bool simulationRunning = false;
@@ -132,6 +142,8 @@ int height = 0;
 
 // swap interval for the display context (vertical synchronization)
 int swapInterval = 1;
+
+double maxStiffness;
 
 // root resource path
 string resourceRoot;
@@ -167,6 +179,63 @@ void close(void);
 // convert to resource path
 #define RESOURCE_PATH(p)    (char*)((resourceRoot+string(p)).c_str())
 
+
+void addMesh(string name, int detail_level, double offset) {
+    // create a virtual mesh
+    hourglass = new cMultiMesh();
+
+    // add object to world
+    world->addChild(hourglass);
+
+    // set the position of hourglass object at the center of the world
+    hourglass->setLocalPos(0.0, 0.0, 0.0);
+    hourglass->rotateAboutGlobalAxisDeg(cVector3d(1,0,0), 90);
+    hourglass->setLocalPos(0.0, 0.0, offset);
+
+    // load an object file
+    bool fileload;
+    string path = "../resources/" + name + std::to_string(detail_level) + ".obj";
+    fileload = hourglass->loadFromFile(RESOURCE_PATH(path));
+    if (!fileload)
+    {
+        #if defined(_MSVC)
+        fileload = hourglass->loadFromFile("../../../bin/resources/models/hourglass/hourglass.obj");
+        #endif
+    }
+    if (!fileload)
+    {
+        printf("Error - 3D Model failed to load correctly.\n");
+        // close();
+        return;
+    }
+
+    // compute a boundary box
+    hourglass->computeBoundaryBox(true);
+
+    // get dimensions of object
+    double size = cSub(hourglass->getBoundaryMax(), hourglass->getBoundaryMin()).length();
+
+    // resize hourglass
+    hourglass->scale(0.25);
+
+    // setup collision detection algorithm
+    // probably want to use CMultiMesh::createBruteForceCollisionDetector() here
+    double toolRadius = 0.05;
+    hourglass->createAABBCollisionDetector(toolRadius);
+
+    // define a default stiffness for the object
+    hourglass->setStiffness(0.8 * maxStiffness, true);
+
+    // create program shader
+    cShaderProgramPtr shaderProgram = cShaderProgram::create(C_SHADER_FONG_VERT, C_SHADER_FONG_FRAG);
+
+    // set uniforms
+    shaderProgram->setUniformi("uShadowMap", C_TU_SHADOWMAP);
+
+    hourglass->setShaderProgram(shaderProgram);
+
+    return;
+}
 
 //==============================================================================
 /*
@@ -389,88 +458,11 @@ int main(int argc, char* argv[])
     double workspaceScaleFactor = tool->getWorkspaceScaleFactor();
 
     // stiffness properties
-    double maxStiffness	= hapticDeviceInfo.m_maxLinearStiffness / workspaceScaleFactor;
+    maxStiffness = hapticDeviceInfo.m_maxLinearStiffness / workspaceScaleFactor;
 
 
-    /////////////////////////////////////////////////////////////////////////
-    // BASE
-    /////////////////////////////////////////////////////////////////////////
-
-    // create a mesh
-    cMesh* base = new cMesh();
-
-    // add object to world
-    world->addChild(base);
-
-    // build mesh using a cylinder primitive
-    cCreateCylinder(base,
-                    0.01,
-                    0.5,
-                    36,
-                    1,
-                    10,
-                    true,
-                    true,
-                    cVector3d(0.0, 0.0,-0.01),
-                    cMatrix3d(cDegToRad(0), cDegToRad(0), cDegToRad(0), C_EULER_ORDER_XYZ)
-                    );
-
-    // set material properties
-    base->m_material->setGrayGainsboro();
-    base->m_material->setStiffness(0.5 * maxStiffness);
-
-    // build collision detection tree
-    base->createAABBCollisionDetector(toolRadius);
-
-    // use display list to optimize graphic rendering performance
-    base->setUseDisplayList(true);
-
-    /////////////////////////////////////////////////////////////////////////
-    // HOURGLASS
-    /////////////////////////////////////////////////////////////////////////
-
-    // create a virtual mesh
-    hourglass = new cMultiMesh();
-
-    // add object to world
-    world->addChild(hourglass);
-
-    // set the position of hourglass object at the center of the world
-    hourglass->setLocalPos(0.0, 0.25, 0.0);
-    hourglass->rotateAboutGlobalAxisDeg(cVector3d(1,0,0), 90);
-
-    // load an object file
-    bool fileload;
-    fileload = hourglass->loadFromFile(RESOURCE_PATH("../resources/models/hourglass/hourglass.obj"));
-    if (!fileload)
-    {
-        #if defined(_MSVC)
-        fileload = hourglass->loadFromFile("../../../bin/resources/models/hourglass/hourglass.obj");
-        #endif
-    }
-    if (!fileload)
-    {
-        printf("Error - 3D Model failed to load correctly.\n");
-        close();
-        return (-1);
-    }
-
-    // compute a boundary box
-    hourglass->computeBoundaryBox(true);
-
-    // get dimensions of object
-    double size = cSub(hourglass->getBoundaryMax(), hourglass->getBoundaryMin()).length();
-
-    // resize hourglass
-    hourglass->scale(0.015);
-
-    // setup collision detection algorithm
-    // probably want to use CMultiMesh::createBruteForceCollisionDetector() here
-    hourglass->createAABBCollisionDetector(toolRadius);
-
-    // define a default stiffness for the object
-    hourglass->setStiffness(0.8 * maxStiffness, true);
-
+    // OBJECT FIRST INSTANTIATION
+    addMesh(meshes[mesh_index], detail, offset[mesh_index]);
 
     //--------------------------------------------------------------------------
     // CREATE SHADERS
@@ -484,8 +476,6 @@ int main(int argc, char* argv[])
 
     // assign shader to mesh objects in the world
     tool->setShaderProgram(shaderProgram);
-    base->setShaderProgram(shaderProgram);
-    hourglass->setShaderProgram(shaderProgram);
 
 
     //--------------------------------------------------------------------------
@@ -499,6 +489,17 @@ int main(int argc, char* argv[])
     labelRates = new cLabel(font);
     labelRates->m_fontColor.setBlack();
     camera->m_frontLayer->addChild(labelRates);
+
+    // create a label for instructions
+    labelInstructions = new cLabel(font);
+    labelInstructions->m_fontColor.setBlack();
+    camera->m_frontLayer->addChild(labelInstructions);
+
+    // update haptic and graphic rate data
+    labelInstructions->setText("Rate the Percieved Smoothness: [1] Angular --- [2] Coarse --- [3] Smooth");
+
+    // update position of label
+    labelInstructions->setLocalPos((int)(0.5 * (width - labelInstructions->getWidth())), 50);
 
     // create a background
     background = new cBackground();
@@ -575,13 +576,56 @@ void errorCallback(int a_error, const char* a_description)
     cout << "Error: " << a_description << endl;
 }
 
-//------------------------------------------------------------------------------
-
 void keyCallback(GLFWwindow* a_window, int a_key, int a_scancode, int a_action, int a_mods)
 {
     // filter calls that only include a key press
     if ((a_action != GLFW_PRESS) && (a_action != GLFW_REPEAT))
     {
+        return;
+    }
+
+    bool next_mesh = false;
+    if (a_key == GLFW_KEY_1) {
+        // report outcome
+        std::cout << meshes[mesh_index] << " with detail " << detail << " rated as angular" << std::endl;
+        next_mesh = true;
+    }
+
+    if (a_key == GLFW_KEY_2) {
+        // report outcome
+        std::cout << meshes[mesh_index] << " with detail " << detail << " rated as course" << std::endl;
+        next_mesh = true;
+    }
+
+    if (a_key == GLFW_KEY_3) {
+        // report outcome
+        std::cout << meshes[mesh_index] << " with detail " << detail << " rated as angular" << std::endl;
+        // end survey of shape here
+        detail = max_detail;
+        next_mesh = true;
+    }
+
+    if (next_mesh) {
+        // remove current mesh
+        world->removeChild(hourglass);
+        
+        // get next model
+        detail++;
+        if (detail > max_detail){
+            detail = 0;
+            mesh_index++;
+        }
+
+        if (mesh_index > max_mesh_index) {
+            // update haptic and graphic rate data
+            labelInstructions->setText("Survey Completed! Thank you for participating!");
+
+            // update position of label
+            labelInstructions->setLocalPos((int)(0.5 * (width - labelInstructions->getWidth())), 150);
+            return;
+        }
+
+        addMesh(meshes[mesh_index], detail, offset[mesh_index]);
         return;
     }
 
